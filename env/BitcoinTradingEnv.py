@@ -15,7 +15,7 @@ MAX_TRADING_SESSION = 100000
 
 class BitcoinTradingEnv(gym.Env):
     """A Bitcoin trading environment for OpenAI gym"""
-    metadata = {'render.modes': ['human', 'system', 'none']}
+    metadata = {'render.modes': ['human', 'system', 'file', 'none']}
     scaler = preprocessing.MinMaxScaler()
     viewer = None
 
@@ -28,6 +28,8 @@ class BitcoinTradingEnv(gym.Env):
         self.commission = commission
         self.serial = serial
 
+        self.file_history = ""
+
         #Add column from OHLCV using TA-Lib Library
         scaled_df = self.df[['Open', 'High', 'Low', 'Close', 'Volume']].astype('float64')
         scaled_df.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'},
@@ -35,15 +37,13 @@ class BitcoinTradingEnv(gym.Env):
 
         stock = StockDataFrame.retype(scaled_df)
         indicators_df = stock[['macd', 'vr']]
-        indicators_df = pd.concat([indicators_df, CCI(scaled_df), OBV(scaled_df), RSI(scaled_df), STOCHRSI(scaled_df)],
-                                  axis=1)
+        indicators_df = pd.concat([indicators_df, CCI(scaled_df), OBV(scaled_df), RSI(scaled_df), STOCHRSI(scaled_df)], axis=1)
         indicators_df.rename(columns={0: 'cci', 1: 'obv', 2: 'rsi'}, inplace=True)
 
-        self.df = pd.concat([self.df[['Timestamp', 'Close']], indicators_df], axis=1)
+        self.df = pd.concat([self.df, indicators_df], axis=1)
         self.df = self.df.dropna()
 
         # Actions of the format Buy 1/10, Sell 3/10, Hold (amount ignored), etc.
-        #self.action_space = spaces.MultiDiscrete([3, 10])
         self.action_space = spaces.Discrete(9)
 
         # Observes the OHCLV values, net worth, and trade history
@@ -54,17 +54,23 @@ class BitcoinTradingEnv(gym.Env):
         end = self.current_step + self.lookback_window_size + 1
 
         scaled_df = self.active_df.values[:end].astype('float64')
-        scaled_df = self.scaler.fit_transform(scaled_df)
         scaled_df = pd.DataFrame(scaled_df, columns=self.df.columns)
 
-        obs = scaled_df.drop(columns=['Timestamp']).values[self.current_step:end].transpose()
-
-        scaled_history = self.scaler.fit_transform(self.account_history)
-
-        #print("obs.shape : {}, scaled_history.shape : {}, df len : {}, current_step : {}".format(obs.shape, scaled_history[:, -(self.lookback_window_size + 1):].shape, len(self.df), self.current_step))
+        obs = np.array([
+            scaled_df['Close'].values[self.current_step:end],
+            scaled_df['macd'].values[self.current_step:end],
+            scaled_df['vr'].values[self.current_step:end],
+            scaled_df['cci'].values[self.current_step:end],
+            scaled_df['obv'].values[self.current_step:end],
+            scaled_df['rsi'].values[self.current_step:end],
+            scaled_df['fastk'].values[self.current_step:end],
+            scaled_df['fastd'].values[self.current_step:end],
+        ])
 
         obs = np.append(
-            obs, scaled_history[:, -(self.lookback_window_size + 1):], axis=0)
+            obs, self.account_history[:, -(self.lookback_window_size + 1):], axis=0)
+
+        obs = self.scaler.fit_transform(obs)
 
         return obs
 
@@ -72,8 +78,6 @@ class BitcoinTradingEnv(gym.Env):
         self.current_step = int(len(self.df)*random.random())
         if len(self.df) - self.current_step <= 500:
             self.current_step -= 500
-
-        print("start step : {}".format(self.current_step))
 
         if self.serial:
             self.steps_left = len(self.df) - self.lookback_window_size - 1
@@ -116,15 +120,18 @@ class BitcoinTradingEnv(gym.Env):
         cost = 0
         sales = 0
 
-        if action_type < 1:
-            btc_bought = self.balance / current_price * amount
+        if (action_type == 0 and self.balance < self.initial_balance * 0.01) or \
+            (action_type == 1 and self.btc_held <= 0):
+            return -1
+
+        if action_type < 1: #BUY
+            btc_bought = (self.balance * amount)/ current_price
             cost = btc_bought * current_price * (1 + self.commission)
 
             self.btc_held += btc_bought
             self.balance -= cost
 
-
-        elif action_type < 2:
+        elif action_type < 2: #SELL
             btc_sold = self.btc_held * amount
             sales = btc_sold * current_price * (1 - self.commission)
 
@@ -146,12 +153,15 @@ class BitcoinTradingEnv(gym.Env):
             [sales]
         ], axis=1)
 
+        return 0
+
     def step(self, action):
         current_price = self._get_current_price()
 
         prev_net_worth = self.net_worth
 
-        self._take_action(action, current_price)
+        if(self._take_action(action, current_price) < 0):
+            return
 
         self.steps_left -= 1
         self.current_step += 1
@@ -163,8 +173,19 @@ class BitcoinTradingEnv(gym.Env):
             self._reset_session()
 
         obs = self._next_observation()
-        reward = ((self.net_worth - prev_net_worth) / prev_net_worth)
-        done = self.current_step + self.lookback_window_size + 3 > len(self.df) or self.net_worth <= self.initial_balance*0.5
+        reward = ((self.net_worth - prev_net_worth) / prev_net_worth) * 100
+        done = self.current_step + self.lookback_window_size + 3 > len(self.df) or self.net_worth <= self.initial_balance*0.8 or \
+               self.net_worth >= self.initial_balance * 1.2
+
+        if action // 4 == 0:
+            amount = ((action % 4) + 1)/ 4
+            self.file_history = "{}%({}) BUY ({} -> {})".format(amount*100, self.account_history[-1,-4], prev_net_worth, self.net_worth)
+        elif action // 4 == 1:
+            amount = ((action % 4) + 1) / 4
+            self.file_history = "{}%({}) SELL ({} -> {})".format(amount*100, self.account_history[-1,-2], prev_net_worth, self.net_worth)
+        else:
+            self.file_history = "HOLD ({} -> {})".format(prev_net_worth, self.net_worth)
+
         return obs, reward, done, {}
 
     def render(self, mode='human', **kwargs):
@@ -185,6 +206,10 @@ class BitcoinTradingEnv(gym.Env):
                                self.net_worth,
                                self.trades,
                                window_size=self.lookback_window_size)
+
+        elif mode == 'file':
+            with open('log/hisotry.txt', 'a') as f:
+                f.write("{}\n".format(self.file_history))
 
     def close(self):
         if self.viewer is not None:
