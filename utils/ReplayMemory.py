@@ -38,3 +38,20 @@ class ReplayBuffer():
 
     def size(self):
         return len(self.buffer)
+
+
+class Memory():
+    def __init__(self):
+        self.memory = []
+
+    def put(self, transition):
+        self.memory.append(transition)
+
+    def clean(self):
+        self.memory = []
+
+    def __len__(self):
+        return len(self.memory)
+
+    def __getitem__(self, idx):
+        return self.memory[idx]

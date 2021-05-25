@@ -4,7 +4,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 class PPO():
-    def __init__(self, model, config):
+    def __init__(self, model, memory, config):
         '''
         config parameters
         lr = learning rate
@@ -14,12 +14,9 @@ class PPO():
         eps_clip = eps_clip
         '''
         self.model = model
-        self.memory = []
+        self.memory = memory
         self.config = config
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.config['lr'])
-
-    def put_data(self, transition):
-        self.memory.append(transition)
 
     def _make_batch(self):
         s_lst, a_lst, r_lst, s_prime_lst, prob_a_lst, done_lst = [], [], [], [], [], []
@@ -39,7 +36,7 @@ class PPO():
                                               torch.tensor(r_lst), torch.tensor(s_prime_lst, dtype=torch.float), \
                                               torch.tensor(done_lst, dtype=torch.float), torch.tensor(prob_a_lst)
 
-        self.memory = []
+        self.memory.clean()
         return s, a, r, s_prime, done_mask, prob_a
 
     def train(self):
@@ -66,7 +63,7 @@ class PPO():
 
             surr1 = ratio * advantage
             surr2 = torch.clamp(ratio, 1 - self.config['eps_clip'], 1 + self.config['eps_clip']) * advantage
-            loss = -torch.min(surr1, surr2) + F.smooth_l1_loss(self.model.v(s), td_target.detach())
+            loss = -torch.min(surr1, surr2) + F.smooth_l1_loss(self.model.v(s), td_target.detach()) -
 
             self.optimizer.zero_grad()
             loss.mean().backward()

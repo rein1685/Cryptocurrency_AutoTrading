@@ -75,9 +75,10 @@ class BitcoinTradingEnv(gym.Env):
         return obs
 
     def _reset_session(self):
-        self.current_step = int(len(self.df)*random.random())
-        if len(self.df) - self.current_step <= 500:
-            self.current_step -= 500
+        #self.current_step = int(len(self.df)*random.random())
+        #if len(self.df) - self.current_step <= 500:
+        #    self.current_step -= 500
+        self.current_step = 0
 
         if self.serial:
             self.steps_left = len(self.df) - self.lookback_window_size - 1
@@ -112,6 +113,8 @@ class BitcoinTradingEnv(gym.Env):
         return self.df['Close'].values[self.frame_start + self.current_step]
 
     def _take_action(self, action, current_price):
+        #return_value = 0
+
         action_type = action // 4
         amount = ((action % 4) + 1)/ 4
 
@@ -120,9 +123,9 @@ class BitcoinTradingEnv(gym.Env):
         cost = 0
         sales = 0
 
-        if (action_type == 0 and self.balance < self.initial_balance * 0.01) or \
-            (action_type == 1 and self.btc_held <= 0):
-            return -1
+        #if (action_type == 0 and self.balance < self.initial_balance * 0.01) or \
+        #    (action_type == 1 and self.btc_held <= 0) or action_type == 2:
+        #    return_value = -1
 
         if action_type < 1: #BUY
             btc_bought = (self.balance * amount)/ current_price
@@ -153,15 +156,14 @@ class BitcoinTradingEnv(gym.Env):
             [sales]
         ], axis=1)
 
-        return 0
+        #return return_value
 
     def step(self, action):
         current_price = self._get_current_price()
 
         prev_net_worth = self.net_worth
 
-        if(self._take_action(action, current_price) < 0):
-            return
+        self._take_action(action, current_price)
 
         self.steps_left -= 1
         self.current_step += 1
@@ -177,14 +179,23 @@ class BitcoinTradingEnv(gym.Env):
         done = self.current_step + self.lookback_window_size + 3 > len(self.df) or self.net_worth <= self.initial_balance*0.8 or \
                self.net_worth >= self.initial_balance * 1.2
 
-        if action // 4 == 0:
-            amount = ((action % 4) + 1)/ 4
-            self.file_history = "{}%({}) BUY ({} -> {})".format(amount*100, self.account_history[-1,-4], prev_net_worth, self.net_worth)
-        elif action // 4 == 1:
-            amount = ((action % 4) + 1) / 4
-            self.file_history = "{}%({}) SELL ({} -> {})".format(amount*100, self.account_history[-1,-2], prev_net_worth, self.net_worth)
-        else:
-            self.file_history = "HOLD ({} -> {})".format(prev_net_worth, self.net_worth)
+
+        try:
+            if action // 4 == 0:
+                amount = ((action % 4) + 1)/ 4
+                self.file_history = "{}%({}) BUY ({} -> {})".format(amount*100, self.trades[-1]['totals'], prev_net_worth, self.net_worth)
+            elif action // 4 == 1:
+                amount = ((action % 4) + 1) / 4
+                self.file_history = "{}%({}) SELL ({} -> {})".format(amount*100, self.trades[-1]['totals'], prev_net_worth, self.net_worth)
+            else:
+                self.file_history = "HOLD ({} -> {})".format(prev_net_worth, self.net_worth)
+        except:
+            print("error1")
+            pass
+
+
+        #if (self._take_action(action, current_price) < 0):
+        #    reward = -10
 
         return obs, reward, done, {}
 
