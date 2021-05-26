@@ -34,7 +34,7 @@ print('action space:', test_env.action_space)
 memory = Memory()
 
 model = MODEL(c_in=test_env.observation_space.shape[0],
-                   c_out=test_env.action_space.n,
+                    c_out=test_env.action_space.n,
                    seq_len=test_env.observation_space.shape[1])
 model = model.to(device)
 
